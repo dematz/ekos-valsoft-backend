@@ -6,43 +6,12 @@ use App\Models\Item;
 
 class ItemObserver
 {
-    /**
-     * Handle the Item "created" event.
-     */
-    public function created(Item $item): void
+    public function saving(Item $item): void
     {
-        //
-    }
-
-    /**
-     * Handle the Item "updated" event.
-     */
-    public function updated(Item $item): void
-    {
-        //
-    }
-
-    /**
-     * Handle the Item "deleted" event.
-     */
-    public function deleted(Item $item): void
-    {
-        //
-    }
-
-    /**
-     * Handle the Item "restored" event.
-     */
-    public function restored(Item $item): void
-    {
-        //
-    }
-
-    /**
-     * Handle the Item "force deleted" event.
-     */
-    public function forceDeleted(Item $item): void
-    {
-        //
+        if ($item->isDirty('quantity') || ! $item->exists) {
+            $item->status = $item->quantity <= $item->min_stock_threshold
+                ? 'low stock'
+                : 'in stock';
+        }
     }
 }

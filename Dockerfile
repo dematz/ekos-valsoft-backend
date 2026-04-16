@@ -5,14 +5,16 @@ WORKDIR /var/www/html
 RUN apt-get update && apt-get install -y \
     git curl zip unzip libpng-dev libonig-dev \
     libxml2-dev libzip-dev libpq-dev \
+    autoconf gcc make g++ \
     && docker-php-ext-install pdo pdo_mysql mbstring zip exif pcntl bcmath \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 COPY . .
 
-#RUN composer install --no-dev --optimize-autoloader --no-interaction
 RUN composer install --optimize-autoloader --no-interaction
 
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache

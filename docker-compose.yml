@@ -68,6 +68,27 @@ services:
     networks:
       - valsoft_network
 
+  db_test:
+    image: mysql:8.0
+    container_name: valsoft_db_test
+    restart: unless-stopped
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: "valsoft_inventory_test"
+      MYSQL_ROOT_PASSWORD: "test_secret"
+      MYSQL_USER: "test_user"
+      MYSQL_PASSWORD: "test_secret"
+    volumes:
+      - valsoft_db_test_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest_secret"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - valsoft_network
+
   redis:
     image: redis:7-alpine
     container_name: valsoft_redis
@@ -79,6 +100,7 @@ services:
 
 volumes:
   valsoft_db_data:
+  valsoft_db_test_data:
 
 networks:
   valsoft_network:

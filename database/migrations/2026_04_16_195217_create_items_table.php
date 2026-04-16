@@ -13,7 +13,18 @@ return new class extends Migration
     {
         Schema::create('items', function (Blueprint $table) {
             $table->id();
+            $table->string('name');
+            $table->string('sku')->unique();
+            $table->integer('quantity')->default(0);
+            $table->decimal('price', 10, 2);
+            $table->integer('min_stock_threshold')->default(10);
+            $table->enum('status', ['in stock', 'low stock', 'ordered', 'discontinued'])->default('in stock');
+            $table->foreignId('category_id')->constrained('categories')->onDelete('cascade');
             $table->timestamps();
+            $table->index('name');
+            $table->index('sku');
+            $table->index('status');
+            $table->index('category_id');
         });
     }
 
