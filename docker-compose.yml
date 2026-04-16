@@ -1,0 +1,85 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valsoft_app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      APP_ENV: "${APP_ENV:-local}"
+      APP_DEBUG: "${APP_DEBUG:-true}"
+      APP_KEY: "${APP_KEY}"
+      APP_URL: "${APP_URL:-http://localhost:8000}"
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: "${DB_DATABASE:-valsoft_inventory}"
+      DB_USERNAME: "${DB_USERNAME:-valsoft}"
+      DB_PASSWORD: "${DB_PASSWORD:-secret}"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_DRIVER: "${CACHE_DRIVER:-redis}"
+      QUEUE_CONNECTION: "${QUEUE_CONNECTION:-redis}"
+      SESSION_DRIVER: "${SESSION_DRIVER:-redis}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4o-mini}"
+      OPENAI_MAX_TOKENS: "${OPENAI_MAX_TOKENS:-1000}"
+      AI_RESTOCK_ENABLED: "${AI_RESTOCK_ENABLED:-true}"
+      AI_CATEGORY_ENABLED: "${AI_CATEGORY_ENABLED:-true}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
+      GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI}"
+      MAIL_MAILER: "${MAIL_MAILER:-log}"
+      MAIL_HOST: "${MAIL_HOST:-127.0.0.1}"
+      MAIL_PORT: "${MAIL_PORT:-2525}"
+      MAIL_USERNAME: "${MAIL_USERNAME}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD}"
+      MAIL_FROM_ADDRESS: "${MAIL_FROM_ADDRESS:-noreply@valsoftinventory.com}"
+      MAIL_FROM_NAME: "${MAIL_FROM_NAME:-Valsoft Inventory}"
+    volumes:
+      - .:/var/www/html
+      - /var/www/html/vendor
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - valsoft_network
+
+  db:
+    image: mysql:8.0
+    container_name: valsoft_db
+    restart: unless-stopped
+    ports:
+      - "${DB_EXTERNAL_PORT:-3306}:3306"
+    environment:
+      MYSQL_DATABASE: "${DB_DATABASE:-valsoft_inventory}"
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD:-secret}"
+      MYSQL_USER: "${DB_USERNAME:-valsoft}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:-secret}"
+    volumes:
+      - valsoft_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_PASSWORD:-secret}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - valsoft_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: valsoft_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-6379}:6379"
+    networks:
+      - valsoft_network
+
+volumes:
+  valsoft_db_data:
+
+networks:
+  valsoft_network:
+    driver: bridge
