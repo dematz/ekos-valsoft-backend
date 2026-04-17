@@ -4,20 +4,16 @@ namespace App\Services;
 
 use App\Models\AuditLog;
 use App\Models\Item;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use OpenAI\Laravel\Facades\OpenAI;
 
 class AiPredictionService
 {
-    private string $apiKey;
     private string $model;
-    private string $apiUrl;
 
     public function __construct()
     {
-        $this->apiKey = config('services.gemini.key', '');
-        $this->model  = config('services.gemini.model', 'gemini-1.5-flash');
-        $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$this->model}:generateContent";
+        $this->model = config('openai.model', 'llama-3.3-70b-versatile');
     }
 
     public function predictRestock(Item $item): array
@@ -25,7 +21,47 @@ class AiPredictionService
         $history = $this->buildItemHistory($item);
         $prompt  = $this->buildPrompt($item, $history);
 
-        return $this->callGeminiApi($prompt);
+        if (empty(config('openai.api_key'))) {
+            return $this->mockResponse();
+        }
+
+        $rawText = null;
+
+        try {
+            $response = OpenAI::chat()->create([
+                'model'    => $this->model,
+                'messages' => [
+                    [
+                        'role'    => 'system',
+                        'content' => 'Eres un sistema de análisis de inventario. Responde siempre con JSON puro, sin markdown ni texto adicional.',
+                    ],
+                    [
+                        'role'    => 'user',
+                        'content' => $prompt,
+                    ],
+                ],
+            ]);
+
+            $rawText = $response->choices[0]->message->content;
+
+            $parsed = json_decode(
+                trim($rawText, " \n\r\t`"),
+                associative: true,
+                flags: JSON_THROW_ON_ERROR,
+            );
+
+            return $this->normalizeResponse($parsed);
+
+        } catch (\JsonException) {
+            Log::warning('Groq returned non-JSON', ['raw' => $rawText]);
+
+            return ['error' => 'Could not parse AI response'];
+
+        } catch (\Throwable $e) {
+            Log::error('Groq API error', ['message' => $e->getMessage()]);
+
+            return ['error' => 'AI service unavailable'];
+        }
     }
 
     private function buildItemHistory(Item $item): array
@@ -42,95 +78,43 @@ class AiPredictionService
                 'quantity_old' => $log->changes['quantity']['old'] ?? null,
                 'quantity_new' => $log->changes['quantity']['new'] ?? null,
             ])
-            ->filter(fn ($entry) => $entry['quantity_old'] !== null && $entry['quantity_new'] !== null)
+            ->filter(fn ($e) => $e['quantity_old'] !== null && $e['quantity_new'] !== null)
             ->values()
             ->toArray();
     }
 
     private function buildPrompt(Item $item, array $history): string
     {
-        $historyText = empty($history)
-            ? 'No hay historial de cambios de stock registrado.'
+        $historyString = empty($history)
+            ? 'Sin movimientos registrados.'
             : collect($history)
-                ->map(fn ($h) => "  - {$h['date']}: {$h['quantity_old']} → {$h['quantity_new']}")
-                ->implode("\n");
+                ->map(fn ($e) => "{$e['date']}: {$e['quantity_old']} → {$e['quantity_new']}")
+                ->implode(', ');
 
-        return <<<PROMPT
-        Eres un analista experto en gestión de inventario. Analiza los siguientes datos y proporciona una predicción de reabastecimiento.
-
-        DATOS DEL ARTÍCULO:
-        - Nombre: {$item->name}
-        - SKU: {$item->sku}
-        - Stock actual: {$item->quantity} unidades
-        - Umbral mínimo de stock: {$item->min_stock_threshold} unidades
-        - Estado actual: {$item->status}
-        - Precio unitario: \${$item->price}
-        - Categoría: {$item->category?->name}
-
-        HISTORIAL DE CAMBIOS DE STOCK (últimas 30 entradas):
-        {$historyText}
-
-        Responde ÚNICAMENTE con un objeto JSON con esta estructura exacta, sin markdown ni texto adicional:
-        {
-            "restock_needed": true/false,
-            "suggested_quantity": número entero,
-            "urgency": "low|medium|high",
-            "estimated_days_until_stockout": número entero o null,
-            "confidence": "low|medium|high",
-            "reasoning": "explicación breve en español"
-        }
-        PROMPT;
+        return 'Basado en este historial de inventario: '
+            . $historyString
+            . ', el stock actual es ' . $item->quantity
+            . ' y el umbral mínimo es ' . $item->min_stock_threshold
+            . '. ¿En cuántos días se agotará?'
+            . ' Responde en JSON con las llaves "prediction_days" (int),'
+            . ' "confidence" (float) y "recommendation" (string).';
     }
 
-    private function callGeminiApi(string $prompt): array
+    private function normalizeResponse(array $parsed): array
     {
-        if (empty($this->apiKey)) {
-            return $this->mockResponse();
-        }
-
-        try {
-            $response = Http::timeout(15)
-                ->withQueryParameters(['key' => $this->apiKey])
-                ->post($this->apiUrl, [
-                    'contents' => [
-                        ['parts' => [['text' => $prompt]]],
-                    ],
-                    'generationConfig' => [
-                        'temperature'     => 0.2,
-                        'maxOutputTokens' => 512,
-                    ],
-                ]);
-
-            if ($response->failed()) {
-                Log::error('Gemini API error', [
-                    'status' => $response->status(),
-                    'body'   => $response->body(),
-                ]);
-
-                return ['error' => 'AI service unavailable', 'status' => $response->status()];
-            }
-
-            $text = $response->json('candidates.0.content.parts.0.text', '');
-
-            return json_decode(trim($text), true)
-                ?? ['error' => 'Could not parse AI response', 'raw' => $text];
-
-        } catch (\Throwable $e) {
-            Log::error('Gemini API exception', ['message' => $e->getMessage()]);
-
-            return ['error' => 'AI service exception', 'message' => $e->getMessage()];
-        }
+        return [
+            'prediction_days' => isset($parsed['prediction_days']) ? (int) $parsed['prediction_days'] : null,
+            'confidence'      => isset($parsed['confidence'])      ? (float) $parsed['confidence']      : null,
+            'recommendation'  => $parsed['recommendation']         ?? null,
+        ];
     }
 
     private function mockResponse(): array
     {
         return [
-            'restock_needed'               => true,
-            'suggested_quantity'           => 50,
-            'urgency'                      => 'medium',
-            'estimated_days_until_stockout' => 14,
-            'confidence'                   => 'low',
-            'reasoning'                    => 'Respuesta simulada. Configure GEMINI_API_KEY para obtener predicciones reales.',
+            'prediction_days' => null,
+            'confidence'      => null,
+            'recommendation'  => 'Configure OPENAI_API_KEY para obtener predicciones reales.',
         ];
     }
 }

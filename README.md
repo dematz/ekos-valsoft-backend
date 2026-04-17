@@ -1,7 +1,7 @@
 # Valsoft Inventory Management System — Backend
 
-REST API built with **Laravel 13** + **PHP 8.3** for the Valsoft Agentic Coding Challenge.  
-Handles inventory management, role-based access control, AI-powered features, and real-time stock alerts.
+REST API built with **Laravel 11** + **PHP 8.3** for scalable inventory management.  
+Features real-time stock tracking, automatic low-stock detection, AI-powered restock predictions via Groq, and comprehensive audit logging.
 
 ---
 
@@ -9,16 +9,15 @@ Handles inventory management, role-based access control, AI-powered features, an
 
 | Layer | Technology |
 |---|---|
-| Framework | Laravel 13 |
+| Framework | Laravel 11 |
 | Language | PHP 8.3 |
 | Database | MySQL 8.0 |
-| Cache / Queues | Redis 7 |
-| Authentication | Laravel Sanctum + Google SSO (Socialite) |
-| Roles & Permissions | Spatie Laravel Permission |
-| Audit Trail | owen-it/laravel-auditing |
-| Import / Export | Maatwebsite Excel |
+| Cache / Sessions / Queues | Redis 7 |
+| Authentication | Laravel Sanctum |
+| AI Integration | OpenAI SDK (Groq backend) — Llama 3.3 70B |
+| Audit Trail | Custom LogsActivity trait + AuditLogService |
 | Containerization | Docker + Docker Compose |
-| CI/CD | GitHub Actions |
+| Testing | PHPUnit (Feature tests) |
 
 ---
 
@@ -97,10 +96,18 @@ DB_PASSWORD=secret
 REDIS_HOST=redis
 REDIS_PORT=6379
 
-OPENAI_API_KEY=your_openai_key_here
+# AI Features (Groq via OpenAI-compatible API)
+OPENAI_API_KEY=gsk_YOUR_GROQ_API_KEY_HERE
+OPENAI_BASE_URL=https://api.groq.com/openai/v1
+OPENAI_MODEL=llama-3.3-70b-versatile
+
+# Google SSO (optional)
 GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
+GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
 ```
+
+**Note:** The `OPENAI_API_KEY` requires a Groq account. Get a free key at [console.groq.com](https://console.groq.com).
 
 ### 3. Build and start containers
 
@@ -175,51 +182,30 @@ API available at `http://localhost:8000`.
 
 ---
 
-## Demo credentials
-
-After running seeders, these accounts are available:
-
-| Role | Email | Password |
-|---|---|---|
-| Admin | admin@demo.com | password |
-| Manager | manager@demo.com | password |
-| Viewer | viewer@demo.com | password |
-
----
-
 ## API overview
 
 Base URL: `http://localhost:8000/api/v1`
 
+All endpoints (except those marked public) require an API token via `Authorization: Bearer <token>` header (Laravel Sanctum).
+
+### Items
 | Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| POST | `/auth/login` | Login, returns token | No |
-| POST | `/auth/register` | Register new user | No |
-| GET | `/auth/me` | Current user info | Yes |
-| GET | `/items` | List items (search + filters) | Yes |
-| POST | `/items` | Create item | Admin, Manager |
-| PUT | `/items/{id}` | Update item | Admin, Manager |
-| DELETE | `/items/{id}` | Delete item | Admin |
-| GET | `/items/{id}/predict` | AI restock prediction | Yes |
-| POST | `/items/suggest-category` | AI category suggestion | Yes |
-| GET | `/categories` | List categories | Yes |
-| GET | `/audit-logs` | Audit trail | Admin |
-| GET | `/stats` | Dashboard metrics | Yes |
-| POST | `/items/import` | CSV bulk import | Admin, Manager |
-| GET | `/items/export` | CSV export | Yes |
+| GET | `/items` | List items (supports `?name`, `?category_id`, `?status`, `?sku` filters) | Required |
+| POST | `/items` | Create item | Required |
+| GET | `/items/{id}` | Get item details | Required |
+| PUT | `/items/{id}` | Update item | Required |
+| DELETE | `/items/{id}` | Delete item | Required |
+| POST | `/items/{id}/predict` | AI-powered restock prediction (Groq/Llama-3) | Required |
 
----
-
-## User roles
-
-| Permission | Admin | Manager | Viewer |
+### Categories
+| Method | Endpoint | Description | Auth |
 |---|---|---|---|
-| View inventory | ✓ | ✓ | ✓ |
-| Create / Edit items | ✓ | ✓ | ✗ |
-| Delete items | ✓ | ✗ | ✗ |
-| Manage users | ✓ | ✗ | ✗ |
-| View audit log | ✓ | ✗ | ✗ |
-| Import / Export CSV | ✓ | ✓ | ✗ |
+| GET | `/categories` | List all categories | Required |
+| POST | `/categories` | Create category | Required |
+| GET | `/categories/{id}` | Get category details | Required |
+| PUT | `/categories/{id}` | Update category | Required |
+| DELETE | `/categories/{id}` | Delete category | Required |
 
 ---
 
@@ -233,6 +219,50 @@ Stock status is updated **automatically** via a model observer when quantity cha
 | `low_stock` | `quantity <= min_stock_threshold` |
 | `ordered` | Manually set when reorder is placed |
 | `discontinued` | Manually set |
+
+---
+
+## AI-powered restock predictions
+
+The system integrates **Groq's Llama 3.3 70B** model via the OpenAI SDK for intelligent inventory forecasting.
+
+### How it works
+
+When you call `POST /api/v1/items/{id}/predict`, the service:
+1. Fetches the item's quantity change history from audit logs
+2. Builds a prompt with historical trends and current stock level
+3. Sends the data to Groq's API
+4. Returns a JSON response with:
+   - `prediction_days` — estimated days until stock depletion
+   - `confidence` — prediction confidence score (0-1)
+   - `recommendation` — actionable restock advice
+
+### Example request
+
+```bash
+curl -X POST http://localhost:8000/api/v1/items/1/predict \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+### Example response
+
+```json
+{
+  "prediction_days": 14,
+  "confidence": 0.87,
+  "recommendation": "Reorder 500 units within 7 days to avoid stockout"
+}
+```
+
+### Configuration
+
+Set these in `.env`:
+- `OPENAI_API_KEY` — Your Groq API key
+- `OPENAI_BASE_URL` — `https://api.groq.com/openai/v1`
+- `OPENAI_MODEL` — `llama-3.3-70b-versatile`
+
+Get a free Groq API key at [console.groq.com](https://console.groq.com).
 
 ---
 
@@ -269,13 +299,6 @@ docker compose down
 # Stop and remove volumes (resets database)
 docker compose down -v
 ```
-
----
-
-## Live demo
-
-> URL: https://your-deploy-url.railway.app  
-> Admin: admin@demo.com / password
 
 ---
 
